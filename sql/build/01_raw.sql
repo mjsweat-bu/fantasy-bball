@@ -30,6 +30,19 @@ CREATE TABLE IF NOT EXISTS raw.espn_scoring_periods (
     PRIMARY KEY (season, scoring_period)
 );
 
+-- Which matchup period (fantasy week) each scoring period (day) belongs to, for the
+-- whole season including days not played yet. Week boundaries are irregular (short
+-- opening week, long All-Star week, two-week playoff rounds), so this comes from
+-- ESPN rather than a calendar rule. matchup_period is null for past days with no
+-- fantasy games. Filled by ingest.load_matchup_days.
+CREATE TABLE IF NOT EXISTS raw.espn_matchup_days (
+    season          integer NOT NULL,
+    scoring_period  integer NOT NULL,
+    matchup_period  integer,
+    fetched_at      timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (season, scoring_period)
+);
+
 -- Transactions (adds, drops, waivers, trades, lineup moves) per scoring period: view mTransactions2.
 CREATE TABLE IF NOT EXISTS raw.espn_transactions (
     season          integer NOT NULL,

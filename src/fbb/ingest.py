@@ -5,6 +5,7 @@
     python -m fbb.ingest 2020 2027          -> a range of seasons
     python -m fbb.ingest history            -> every season the league has existed
     python -m fbb.ingest 2027 --full        -> refetch every day, not just new/recent ones
+    python -m fbb.ingest matchup_days history -> only the day -> matchup week map (all seasons)
 
 League ID and (for private leagues) the espn_s2 / SWID cookies come from .api.env.
 Requests go through espn_api's client, which handles cookies and the older
@@ -149,6 +150,48 @@ def load_season(conn, season, full=False):
         time.sleep(PAUSE)
     print(f"    transactions: {len(todo)} days loaded")
 
+    load_matchup_days(conn, req, season, status["finalScoringPeriod"], league["scoringPeriodId"])
+
+
+def matchup_period_for_day(req, sp):
+    """The matchup period a day belongs to, or None. Same trick as the box scores:
+    ESPN attaches rosterForCurrentScoringPeriod only to that day's matchups."""
+    data = req.league_get(params={"view": ["mMatchupScore", "mScoreboard"], "scoringPeriodId": sp})
+    for m in data.get("schedule", []):
+        if "rosterForCurrentScoringPeriod" in m.get("home", {}) or "rosterForCurrentScoringPeriod" in m.get("away", {}):
+            return m["matchupPeriodId"]
+    return None
+
+
+def load_matchup_days(conn, req, season, final_period, today_period):
+    """Fill raw.espn_matchup_days for every day of the season. Played days are copied
+    from raw.espn_scoring_periods (same ESPN answer, already fetched); only missing days
+    are requested. A day with no answer is stored as null only once it's in the past,
+    so future days (e.g. playoff rounds not set yet) are asked again next run."""
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO raw.espn_matchup_days (season, scoring_period, matchup_period)
+        SELECT season, scoring_period, matchup_period FROM raw.espn_scoring_periods WHERE season = %s
+        ON CONFLICT (season, scoring_period) DO UPDATE SET matchup_period = EXCLUDED.matchup_period
+    """, (season,))
+    conn.commit()
+    cur.execute("SELECT scoring_period FROM raw.espn_matchup_days WHERE season = %s", (season,))
+    have = {r[0] for r in cur.fetchall()}
+    todo = [sp for sp in range(1, final_period + 1) if sp not in have]
+    fetched = 0
+    for sp in todo:
+        mp = matchup_period_for_day(req, sp)
+        time.sleep(PAUSE)
+        if mp is None and sp >= today_period:
+            continue
+        cur.execute("""
+            INSERT INTO raw.espn_matchup_days (season, scoring_period, matchup_period) VALUES (%s, %s, %s)
+            ON CONFLICT (season, scoring_period) DO UPDATE SET matchup_period = EXCLUDED.matchup_period, fetched_at = now()
+        """, (season, sp, mp))
+        conn.commit()
+        fetched += 1
+    print(f"    matchup days: {len(have)} known, {fetched} fetched (season has {final_period} days)")
+
 
 def league_history():
     """Every season the league has existed, from the current season's status."""
@@ -160,6 +203,9 @@ def league_history():
 def main(argv):
     full = "--full" in argv
     args = [a for a in argv if not a.startswith("--")]
+    only_matchup_days = bool(args) and args[0] == "matchup_days"
+    if only_matchup_days:
+        args = args[1:]
     if args == ["history"]:
         seasons = league_history()
     elif len(args) == 2:
@@ -174,7 +220,13 @@ def main(argv):
         ensure_schema(conn)
         load_refs(conn)
         for season in seasons:
-            load_season(conn, season, full)
+            if only_matchup_days:
+                req = client(season)
+                st = req.league_get(params={"view": "mStatus"})
+                print(f"--- {season}: matchup days")
+                load_matchup_days(conn, req, season, st["status"]["finalScoringPeriod"], st["scoringPeriodId"])
+            else:
+                load_season(conn, season, full)
     finally:
         conn.close()
 
