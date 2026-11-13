@@ -14,6 +14,9 @@ logs/
 # database dumps (moving the database between machines)
 *.dump
 
+# personal Claude Code notes (roadmap / progress), not part of the portfolio
+CLAUDE.local.md
+
 # OS / editor files
 .DS_Store
 Thumbs.db

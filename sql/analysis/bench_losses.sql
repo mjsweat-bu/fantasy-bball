@@ -92,15 +92,19 @@ weeks AS (
       AND tm.result IS NOT NULL                 -- skip matchups still in progress
 )
 SELECT
-    w.season,
-    t.team_name,
-    m.display_name                                                      AS manager,
+    t.team_name                                                         AS team_name,   -- most recent name
+    m.display_name                                                      AS manager,     -- most recent owner
+    count(DISTINCT w.season)                                            AS seasons,
     count(*) FILTER (WHERE w.result = 'L')                              AS losses,
     count(*) FILTER (WHERE w.result = 'L' AND w.wins > w.losses)        AS losses_to_bench,
     count(*) FILTER (WHERE w.result = 'L' AND w.wins = w.losses)        AS losses_to_tie,
     sum(w.games_left_on_bench)                                          AS games_left_on_bench
 FROM weeks w
-JOIN core.teams t        ON t.season = w.season AND t.team_id = w.team_id
+JOIN (   -- each team's name and owner from its latest season
+    SELECT DISTINCT ON (team_id) team_id, team_name, primary_owner_id
+    FROM core.teams
+    ORDER BY team_id, season DESC
+) t ON t.team_id = w.team_id
 LEFT JOIN core.members m ON m.member_id = t.primary_owner_id
-GROUP BY w.season, t.team_name, m.display_name
-ORDER BY w.season DESC, losses_to_bench DESC, games_left_on_bench DESC;
+GROUP BY t.team_id, t.team_name, m.display_name
+ORDER BY losses_to_bench DESC, games_left_on_bench DESC;
