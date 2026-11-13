@@ -50,6 +50,21 @@ A full season is ~350 requests (one per day for box scores, one per day for tran
 | `core.draft_picks` | pick: round, team, player, auction bid, keeper |
 | `core.transactions` / `core.transaction_items` | adds, drops, waivers (with FAAB bids), trades, lineup moves |
 
+### NBA game logs
+
+Every player's game log for every NBA game comes from stats.nba.com (`nba_api`), one request per season per
+game type. Backfill with `python -m fbb.ingest_nba 2022 2027`; `fbb.refresh` keeps the current season up to date.
+
+| Table | Grain |
+|---|---|
+| `core.player_games` | NBA player × game: `season_type` (Regular Season / Play-In / Playoffs), opponent, home/away, minutes, box score, `espn_player_id`, ESPN `scoring_period` |
+| `ref.player_xwalk` | NBA player id ↔ ESPN player id, with `match_method` (manual / name / name_team) |
+| `ref.player_xwalk_manual` | your hand fixes, kept across rebuilds |
+| `core.xwalk_unmatched` | NBA players with no ESPN match, most minutes first |
+
+To fix an unmatched player: `INSERT INTO ref.player_xwalk_manual VALUES (<nba id>, <espn id>, 'note');`
+then `python -m fbb.refresh --skip-load`.
+
 Stat lines are `jsonb` keyed by stat name (`stats->>'PTS'`); `ref.*` holds the ESPN id lookups.
 
 ```python

@@ -118,4 +118,6 @@ torch==2.14.1
 xgboost==3.4.1
 # ESPN fantasy API client
 espn_api==1.0.1
+# NBA stats (stats.nba.com) game logs
+nba_api==1.11.6
 -e .

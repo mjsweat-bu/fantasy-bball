@@ -56,6 +56,24 @@ CREATE TABLE IF NOT EXISTS raw.espn_pro_schedule (
     fetched_at  timestamptz NOT NULL DEFAULT now()
 );
 
+-- NBA player game logs from stats.nba.com (nba_api LeagueGameLog), one row per
+-- player per game, loaded by src/fbb/ingest_nba.py. season is the ESPN-style end
+-- year (2026-27 -> 2027); season_type is the type the rows were requested as
+-- (Regular Season, PlayIn, Playoffs). payload is the row as {header: value}.
+CREATE TABLE IF NOT EXISTS raw.nba_game_logs (
+    game_id         text    NOT NULL,
+    nba_player_id   integer NOT NULL,
+    season          integer NOT NULL,
+    season_type     text    NOT NULL,
+    payload         jsonb   NOT NULL,
+    fetched_at      timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (game_id, nba_player_id)
+);
+CREATE INDEX IF NOT EXISTS nba_game_logs_season ON raw.nba_game_logs (season, season_type);
+
+-- Accent stripping for name matching in the player crosswalk (Jokić -> Jokic).
+CREATE EXTENSION IF NOT EXISTS unaccent;
+
 -- Lookups, refilled by the loader from espn_api.basketball.constant
 CREATE TABLE IF NOT EXISTS ref.stats (
     stat_id     text PRIMARY KEY,   -- ESPN stat id as it appears in JSON keys ("0", "1", ...)

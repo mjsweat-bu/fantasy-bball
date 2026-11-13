@@ -1,6 +1,6 @@
 """Refresh the league: load new ESPN data, then rebuild the core tables.
 
-    python -m fbb.refresh                  -> load + rebuild the current season
+    python -m fbb.refresh                  -> load + rebuild the current season (ESPN + NBA game logs)
     python -m fbb.refresh --season 2026    -> a different season
     python -m fbb.refresh --history        -> load every season the league has existed
     python -m fbb.refresh --skip-load      -> rebuild only (no API calls)
@@ -11,7 +11,7 @@ Each build script runs in a transaction, so a failure leaves that table as it wa
 import argparse, subprocess, sys, time
 
 from fbb import config
-from fbb import ingest
+from fbb import ingest, ingest_nba
 
 
 def psql(args):
@@ -57,5 +57,6 @@ if __name__ == "__main__":
     if not a.skip_load:
         argv = ["history"] if a.history else [str(a.season)]
         ingest.main(argv + (["--full"] if a.full else []))
+        ingest_nba.main([str(a.season)])   # NBA game logs; backfill with python -m fbb.ingest_nba 2022 2027
     build()
     summary()

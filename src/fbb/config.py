@@ -38,3 +38,9 @@ def current_season(today=None):
     Fantasy leagues open in late summer, so from August on it's next year's season."""
     today = today or date.today()
     return today.year + 1 if today.month >= 8 else today.year
+
+
+def nba_season_label(season):
+    """ESPN-style season (end year) -> stats.nba.com label: 2027 -> '2026-27'."""
+    return f"{season - 1}-{season % 100:02d}"
+
