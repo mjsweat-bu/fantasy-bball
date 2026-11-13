@@ -1,0 +1,19 @@
+.env
+.venv/
+data/
+pgdata/
+mlruns/
+*.pkl
+.ipynb_checkpoints/
+__pycache__/
+.api.env
+logs/
+/models/
+*.egg-info/
+
+# database dumps (moving the database between machines)
+*.dump
+
+# OS / editor files
+.DS_Store
+Thumbs.db

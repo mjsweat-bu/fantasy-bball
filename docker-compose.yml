@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16
+    container_name: fbb-postgres
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "5433:5432"   # 5432 on the host is taken by cfb-postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/sql:ro
+
+volumes:
+  pgdata:
