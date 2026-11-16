@@ -71,3 +71,56 @@ Stat lines are `jsonb` keyed by stat name (`stats->>'PTS'`); `ref.*` holds the E
 from fbb.db import read_query
 read_query("standings.sql", season=2027)
 ```
+
+## Analysis
+
+### Trade evaluator: `analysis/trade_eval.py`
+
+Compares a trade offer with keeping the current roster, using two horizons: the rest of this season
+and the next five seasons.
+
+```bash
+python analysis/trade_eval.py --team 4 \
+    --give "Cameron Boozer" "Jaylen Brown" \
+    --get "Trae Young" "James Harden" "Dillon Brooks" \
+    --targets PTS AST STL FG3M FT \
+    --avail "Stephen Curry=0.6" \
+    --alt "Jaylen Brown > Trae Young"
+```
+
+`--targets` are the categories you build for (the rest are punted). `--avail` scales a player's
+games-played rate (for example, for an injury). `--alt` adds another scenario, written
+`"Give A, B > Get C / Drop D"`. Run `--help` for the rest.
+
+How it values players:
+
+1. **Value:** per-game z-scores in each of the 9 categories, measured against the season's top 156
+   players (12 teams × 13 roster spots). FG% and FT% are scored by impact: makes above the pool's
+   rate on the player's attempts. Turnovers count against. `z9` sums all nine categories. `zT` sums
+   only the target categories, so `z9 − zT` is what a player gives you in categories you punt.
+2. **Talent:** this season plus the previous two, weighted 1 / 0.5 / 0.25 per game. Older seasons
+   are first adjusted to the player's current age.
+3. **Aging curve:** the average year-over-year change in each stat by age, from players with at
+   least 20 games in both seasons, smoothed over 3 ages. Also gives expected games played by age.
+4. **Dynasty:** value above replacement (players ranked 157-180) × expected share of games,
+   projected 5 seasons ahead.
+5. **Rest of season:** a Monte Carlo simulation of the whole league over the real NBA schedule.
+   Every day each team starts its best legal lineup. Your team ranks players by
+   `0.7·zT + 0.3·z9`, every other team by `z9`. The simulated weeks play out the real H2H schedule
+   and the 6-team playoff bracket. Output: expected categories won, P(win week), P(playoffs) and
+   P(title). Teams the trade doesn't touch reuse the same random draws, so differences between
+   scenarios come from the trade, not from noise.
+
+Player ages come from stats.nba.com and are cached in `data/nba_player_seasons.csv`
+(`--refresh-ages` refetches them). A worked example is in
+[`docs/trade_2026-11-16_boozer_brown.md`](docs/trade_2026-11-16_boozer_brown.md).
+
+### Notebooks
+
+| Notebook | What it answers |
+|---|---|
+| `bench_losses.ipynb` | Weeks lost because of benched players who could legally have started |
+| `losers.ipynb` | Quick look at the bench-losses query |
+| `trade_market.ipynb` | Trades that raise my playoff odds and that the other manager would plausibly accept |
+| `siakam_trade.ipynb` | Fact-checks on my roster, and whether to trade Pascal Siakam to fix FT% |
+| `position_market.ipynb` | By position: who would crack my top 10 in build value (`zT`), plotted against 9-cat value (`z9`) |
