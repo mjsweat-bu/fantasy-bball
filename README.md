@@ -4,6 +4,8 @@ ESPN fantasy basketball league data → Postgres (Docker) → SQL tables for not
 Data comes from ESPN's fantasy API through [espn_api](https://github.com/cwendt94/espn-api).
 Layout follows `cfb-project`: raw JSON tables, numbered `sql/build` scripts that rebuild `core.*`, and a `src/fbb` package.
 
+DISCLAIMER: This whole repo was made using AI.
+
 ## Setup
 
 ```bash
