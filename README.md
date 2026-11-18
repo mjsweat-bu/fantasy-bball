@@ -1,6 +1,6 @@
 # Fantasy basketball league database
 
-ESPN fantasy basketball league data → Postgres (Docker) → SQL tables for notebooks and analysis.
+ESPN fantasy basketball league data → Postgres (hosted on Neon, or local Docker) → SQL tables for notebooks and analysis.
 Data comes from ESPN's fantasy API through [espn_api](https://github.com/cwendt94/espn-api).
 Layout follows `cfb-project`: raw JSON tables, numbered `sql/build` scripts that rebuild `core.*`, and a `src/fbb` package.
 
@@ -14,8 +14,11 @@ python -m venv .venv
 pip install -r requirements.txt
 cp .env.example .env            # set a password
 cp .api.env.example .api.env    # league id, and cookies for a private league
-docker compose up -d            # Postgres 16 on localhost:5433
 ```
+
+**Database:** set `DATABASE_URL` in `.env` to the Neon connection string (`...?sslmode=require`).
+Everything (refresh, ingest, `read_query`, `trade_eval.py`, notebooks) connects there, and no Docker is needed.
+For a local database instead, leave `DATABASE_URL` unset and run `docker compose up -d` (Postgres 16 on localhost:5433).
 
 **Private leagues** need two cookies from a logged-in browser session on fantasy.espn.com
 (dev tools → Application → Cookies): `espn_s2` and `SWID` (keep the `{}` braces). Put them in `.api.env`.
