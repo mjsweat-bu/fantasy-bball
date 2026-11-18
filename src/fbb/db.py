@@ -143,7 +143,7 @@ def _http_rows_to_frame(result):
     return df
 
 
-def _read_sql_http(sql, timeout=120):
+def _read_sql_http(sql, timeout=600):   # bench_losses.sql takes ~3 min on Neon
     url = _libpq_url(config.DATABASE_URL)
     for attempt in (1, 2):   # one retry for errors Neon flags as retryable (e.g. compute waking up)
         resp = requests.post(
