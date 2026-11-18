@@ -1,7 +1,8 @@
 .env
 .venv/
+# data/ is ignored except the age cache used by analysis/trade_eval.py
 data/*
-!data/nba_player_seasons.csv   # age cache for analysis/trade_eval.py
+!data/nba_player_seasons.csv
 pgdata/
 mlruns/
 *.pkl
