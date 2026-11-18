@@ -27,6 +27,11 @@ DB_NAME = os.environ.get("POSTGRES_DB")
 DB_USER = os.environ.get("POSTGRES_USER")
 DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
 
+# hosted database (Neon, etc.): a full connection URL, e.g.
+#   postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/fantasy-bball?sslmode=require
+# When set, it takes priority over the POSTGRES_* settings above.
+DATABASE_URL = os.environ.get("DATABASE_URL") or None
+
 # ESPN fantasy league
 ESPN_LEAGUE_ID = int(os.environ["ESPN_LEAGUE_ID"]) if os.environ.get("ESPN_LEAGUE_ID") else None
 ESPN_S2 = os.environ.get("ESPN_S2") or None
