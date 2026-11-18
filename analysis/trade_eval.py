@@ -25,7 +25,8 @@ Method (see docs/trade_2026-11-16_boozer_brown.md for a worked example):
      team starts its best legal lineup (PG SG SF PF C UT UT) from the players who play that day
      (my team by target-weighted value, everyone else by 9-cat value). Weekly totals decide the
      real remaining H2H schedule, then the 6-team bracket -> P(win week), final wins,
-     P(playoffs), P(title). Teams the trade doesn't touch reuse identical simulated weeks
+     P(playoffs), P(final), P(title). A team with an open roster spot after the trade adds the
+     best free agent; a partner that takes more players than it sends drops its lowest-value ones. Teams the trade doesn't touch reuse identical simulated weeks
      (common random numbers), so differences between scenarios come from the trade, not noise.
 """
 import argparse, math, sys, time
@@ -400,7 +401,7 @@ class League:
         key = wins * 1e4 + catw + rng.random(wins.shape) * 0.1
         order = np.argsort(-key, axis=1)
         seed_of = np.empty_like(order); seed_of[np.arange(sims)[:, None], order] = np.arange(len(teams))
-        champ = np.zeros((sims, len(teams)))
+        champ = np.zeros((sims, len(teams))); final = np.zeros((sims, len(teams)))
         r1, r2, r3 = (self.n_reg + 1 - self.cur_mp, self.n_reg + 2 - self.cur_mp, self.n_reg + 3 - self.cur_mp)
 
         def winner(s, hi, lo, w):   # higher seed advances on a tie
@@ -411,14 +412,16 @@ class League:
             a45 = winner(s, sd[3], sd[4], r1); a36 = winner(s, sd[2], sd[5], r1)
             f1 = winner(s, sd[0], a45, r2); f2 = winner(s, sd[1], a36, r2)
             hi, lo = (f1, f2) if seed_of[s, f1] < seed_of[s, f2] else (f2, f1)
+            final[s, [f1, f2]] = 1
             champ[s, winner(s, hi, lo, r3)] = 1
-        return {'wins': wins, 'seed': seed_of, 'champ': champ,
+        return {'wins': wins, 'seed': seed_of, 'champ': champ, 'final': final,
                 'mine_cats': np.stack(mine_cats, 1), 'mine_week': np.stack(mine_week, 1)}
 
     def summary(self, res, team_id):
         i = self.teams.index(team_id)
         return {'final_wins': res['wins'][:, i].mean(), 'P(playoffs)': (res['seed'][:, i] < self.n_playoff_teams).mean(),
-                'P(top-2 bye)': (res['seed'][:, i] < 2).mean(), 'P(title)': res['champ'][:, i].mean()}
+                'P(top-2 bye)': (res['seed'][:, i] < 2).mean(), 'P(final)': res['final'][:, i].mean(),
+                'P(title)': res['champ'][:, i].mean()}
 
     def my_summary(self, res):
         mc = res['mine_cats']   # [sims, my remaining matchups, 9]
@@ -585,6 +588,10 @@ def main(argv=None):
             part = {k: v for k, v in base[partner].items() if k not in get}
             out = {n: L.player(L.rosters[L.rosters.player_name == n].iloc[0], mode == 'form', False) for n in give}
             part.update({k: v for k, v in out.items() if v})
+            # a partner that takes more players than it sends drops its lowest-value ones
+            while len(part) > len(base[partner]):
+                worst = min((p for p in part.values() if p['name'] not in give), key=lambda p: p['val'])
+                part.pop(worst['name']); partner_drops.setdefault(partner, []).append(worst['name'])
             # a team left with an open roster spot picks up the best free agent(s)
             fas = iter(fa_pool)
             for team, ros in ((partner, part), (a.team, mine)):
@@ -602,7 +609,7 @@ def main(argv=None):
             if name == 'as is':
                 res, st, partner = base_res, S0[a.team], scenario(a.give, a.get)
             else:
-                pickups = {}
+                pickups, partner_drops = {}, {}
                 partner, mine, part = build(give, get, drop)
                 if drop is None and len(mine) > len(base[a.team]):
                     # pick the drop that keeps the most expected category wins (quick 80-sim runs)
@@ -623,6 +630,8 @@ def main(argv=None):
             key = name + (f' (drop {drop})' if drop else '')
             if name != 'as is' and pickups:
                 key += ''.join(f"; {L.names[t]} adds {', '.join(ns)}" for t, ns in pickups.items())
+            if name != 'as is' and partner_drops:
+                key += ''.join(f"; {L.names[t]} drops {', '.join(ns)}" for t, ns in partner_drops.items())
             rows[key] = L.my_summary(res); starts[key] = st
             partner_rows[key] = {f'{L.names[partner]}: ' + k: v for k, v in L.summary(res, partner).items()}
 
