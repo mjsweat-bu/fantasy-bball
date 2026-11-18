@@ -1,6 +1,7 @@
 .env
 .venv/
-data/
+data/*
+!data/nba_player_seasons.csv   # age cache for analysis/trade_eval.py
 pgdata/
 mlruns/
 *.pkl
