@@ -20,6 +20,12 @@ cp .api.env.example .api.env    # league id, and cookies for a private league
 Everything (refresh, ingest, `read_query`, `trade_eval.py`, notebooks) connects there, and no Docker is needed.
 For a local database instead, leave `DATABASE_URL` unset and run `docker compose up -d` (Postgres 16 on localhost:5433).
 
+**HTTPS-only machines** (e.g. a Claude cloud session behind a proxy, where port 5432 is blocked): reads
+(`read_sql`, `read_query`, `trade_eval.py`, notebooks) switch to Neon's SQL-over-HTTP endpoint automatically.
+`FBB_DB_TRANSPORT=tcp|http|auto` overrides this (default `auto`: http only when `DATABASE_URL` is a Neon
+host and port 5432 is unreachable). Refresh and ingest always need a normal Postgres connection.
+Use a read-only role there (e.g. `analyst`).
+
 **Private leagues** need two cookies from a logged-in browser session on fantasy.espn.com
 (dev tools → Application → Cookies): `espn_s2` and `SWID` (keep the `{}` braces). Put them in `.api.env`.
 They expire every few months; refresh them if loads start returning 401.
@@ -75,9 +81,12 @@ then `python -m fbb.refresh --skip-load`.
 Stat lines are `jsonb` keyed by stat name (`stats->>'PTS'`); `ref.*` holds the ESPN id lookups.
 
 ```python
-from fbb.db import read_query
+from fbb.db import read_query, read_sql
 read_query("standings.sql", season=2027)
+read_sql("SELECT team_id, team_name FROM core.teams WHERE season = 2027")
 ```
+
+Use `read_sql` rather than `pd.read_sql(sql, engine)` so the code also runs over HTTPS (see above).
 
 ## Analysis
 

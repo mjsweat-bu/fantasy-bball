@@ -35,7 +35,7 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
 from fbb import config
-from fbb.db import engine
+from fbb.db import read_sql
 
 pd.set_option('display.width', 250); pd.set_option('display.max_columns', 40); pd.set_option('display.max_rows', 300)
 
@@ -244,17 +244,17 @@ class League:
 
     def __init__(self, model, season, my_team, overrides, seed=7):
         self.m, self.season, self.my_team, self.overrides, self.seed = model, season, my_team, overrides, seed
-        sched = pd.read_sql(f"SELECT payload FROM raw.espn_pro_schedule WHERE season={season}", engine).payload[0]
+        sched = read_sql(f"SELECT payload FROM raw.espn_pro_schedule WHERE season={season}").payload[0]
         self.games = {t['abbrev']: {int(sp) for sp in t.get('proGamesByScoringPeriod', {})}
                       for t in sched['settings']['proTeams']}
-        lg = pd.read_sql(f"SELECT payload FROM raw.espn_league WHERE season={season}", engine).payload[0]
+        lg = read_sql(f"SELECT payload FROM raw.espn_league WHERE season={season}").payload[0]
         ss = lg['settings']['scheduleSettings']
         self.cur_mp, self.n_reg = lg['status']['currentMatchupPeriod'], ss['matchupPeriodCount']
         self.n_playoff_teams = ss['playoffTeamCount']
         n_rounds = math.ceil(math.log2(self.n_playoff_teams))
         final_sp = lg['status']['finalScoringPeriod']
-        start = int(pd.read_sql(f"SELECT min(scoring_period) FROM core.player_days WHERE season={season} "
-                                f"AND matchup_period={self.cur_mp}", engine).iloc[0, 0])
+        start = int(read_sql(f"SELECT min(scoring_period) FROM core.player_days WHERE season={season} "
+                                f"AND matchup_period={self.cur_mp}").iloc[0, 0])
         # remaining weeks are 7 days, except that the week holding the All-Star break (the last run of
         # 4+ days with no NBA games) absorbs whatever days are left so the season ends on final_sp
         n_weeks = self.n_reg + n_rounds - self.cur_mp + 1
@@ -280,32 +280,32 @@ class League:
         self.week_of_day = np.concatenate([[w] * len(r) for w, r in enumerate(self.weeks)])
         self.week_ids = list(range(self.cur_mp, self.cur_mp + n_weeks))
 
-        tm = pd.read_sql(f"SELECT matchup_period, team_id, opponent_id FROM core.team_matchups "
-                         f"WHERE season={season} AND matchup_period >= {self.cur_mp} AND team_id < opponent_id", engine)
+        tm = read_sql(f"SELECT matchup_period, team_id, opponent_id FROM core.team_matchups "
+                         f"WHERE season={season} AND matchup_period >= {self.cur_mp} AND team_id < opponent_id")
         self.schedule = {k: list(zip(g.team_id, g.opponent_id)) for k, g in tm.groupby('matchup_period')}
-        t = pd.read_sql(f"SELECT team_id, team_name, wins, losses, ties FROM core.teams WHERE season={season}", engine)
+        t = read_sql(f"SELECT team_id, team_name, wins, losses, ties FROM core.teams WHERE season={season}")
         self.teams = list(t.team_id); self.names = dict(zip(t.team_id, t.team_name.str.strip()))
         self.wins0 = dict(zip(t.team_id, t.wins + 0.5 * t.ties))
-        cw = pd.read_sql(f"SELECT team_id, sum(cat_wins) cw FROM core.team_matchups WHERE season={season} "
-                         f"AND matchup_period < {self.cur_mp} GROUP BY 1", engine)
+        cw = read_sql(f"SELECT team_id, sum(cat_wins) cw FROM core.team_matchups WHERE season={season} "
+                         f"AND matchup_period < {self.cur_mp} GROUP BY 1")
         self.catwins0 = dict(zip(cw.team_id, cw.cw))
 
-        tg = pd.read_sql(f"""SELECT g.nba_player_id, count(*) gp, max(t.n) team_g FROM core.player_games g
+        tg = read_sql(f"""SELECT g.nba_player_id, count(*) gp, max(t.n) team_g FROM core.player_games g
             JOIN (SELECT team, count(DISTINCT game_id) n FROM core.player_games
                   WHERE season={season} AND season_type='Regular Season' GROUP BY 1) t USING (team)
-            WHERE g.season={season} AND g.season_type='Regular Season' GROUP BY 1""", engine)
+            WHERE g.season={season} AND g.season_type='Regular Season' GROUP BY 1""")
         self.rate_now = dict(zip(tg.nba_player_id, (tg.gp / tg.team_g).clip(upper=1)))
-        self.rosters = pd.read_sql(f"""SELECT r.team_id, r.player_id, r.player_name, r.injury_status,
+        self.rosters = read_sql(f"""SELECT r.team_id, r.player_id, r.player_name, r.injury_status,
                 p.eligible_positions, p.pro_team, x.nba_player_id
             FROM core.rosters r JOIN core.players p USING (player_id)
             LEFT JOIN ref.player_xwalk x ON x.espn_player_id = r.player_id
-            WHERE r.season={season}""", engine)
+            WHERE r.season={season}""")
         # free agents: unrostered players who have played this season (to fill an open roster spot)
-        self.fa = pd.read_sql(f"""SELECT p.player_id, p.player_name, p.eligible_positions, p.pro_team,
+        self.fa = read_sql(f"""SELECT p.player_id, p.player_name, p.eligible_positions, p.pro_team,
                 x.nba_player_id, 'ACTIVE' AS injury_status
             FROM core.players p JOIN ref.player_xwalk x ON x.espn_player_id = p.player_id
             WHERE p.player_id NOT IN (SELECT player_id FROM core.rosters WHERE season={season})
-              AND x.nba_player_id IN (SELECT nba_player_id FROM core.player_games WHERE season={season})""", engine)
+              AND x.nba_player_id IN (SELECT nba_player_id FROM core.player_games WHERE season={season})""")
         self.skipped = []
 
     def free_agents(self, form_only, exclude=()):
@@ -454,8 +454,8 @@ def main(argv=None):
 
     A = load_player_seasons(season - 8, season, a.refresh_ages)
     m = Model(A, season, a.targets)
-    xw = pd.read_sql("SELECT espn_player_id, nba_player_id FROM ref.player_xwalk", engine)
-    players = pd.read_sql("SELECT player_id, player_name, eligible_positions, pro_team FROM core.players", engine)
+    xw = read_sql("SELECT espn_player_id, nba_player_id FROM ref.player_xwalk")
+    players = read_sql("SELECT player_id, player_name, eligible_positions, pro_team FROM core.players")
     players = players.merge(xw, left_on='player_id', right_on='espn_player_id')
     byname = players.set_index('player_name')
     missing = [n for n in a.give + a.get if n not in byname.index]
@@ -559,10 +559,10 @@ def main(argv=None):
             # calibration: league-average simulated 7-day regular-season week vs actual weeks so far
             reg = [w for w, k in enumerate(L.week_ids) if k <= L.n_reg and len(L.weeks[w]) == 7]
             sim_wk = np.concatenate([T0[t][:, reg].reshape(-1, len(LINE)) for t in T0]).mean(0)
-            mc = pd.read_sql(f"SELECT matchup_period, stat_name, value FROM core.matchup_categories "
-                             f"WHERE season={season} AND matchup_period < {L.cur_mp}", engine)
-            days = pd.read_sql(f"SELECT matchup_period, count(DISTINCT scoring_period) d FROM core.player_days "
-                               f"WHERE season={season} AND matchup_period < {L.cur_mp} GROUP BY 1", engine)
+            mc = read_sql(f"SELECT matchup_period, stat_name, value FROM core.matchup_categories "
+                             f"WHERE season={season} AND matchup_period < {L.cur_mp}")
+            days = read_sql(f"SELECT matchup_period, count(DISTINCT scoring_period) d FROM core.player_days "
+                               f"WHERE season={season} AND matchup_period < {L.cur_mp} GROUP BY 1")
             mc = mc.merge(days, on='matchup_period')
             act = mc.assign(v=np.where(mc.stat_name.isin(['FG%', 'FT%']), mc.value, mc.value * 7 / mc.d)) \
                 .groupby('stat_name').v.mean()
