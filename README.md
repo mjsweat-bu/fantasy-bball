@@ -135,6 +135,42 @@ Player ages come from stats.nba.com and are cached in `data/nba_player_seasons.c
 (`--refresh-ages` refetches them). A worked example is in
 [`docs/trade_2026-11-16_boozer_brown.md`](docs/trade_2026-11-16_boozer_brown.md).
 
+### Matchup planner: `analysis/matchup_plan.py`
+
+Plans one head-to-head week against the actual opponent: who to start each day, and which free
+agents to add (on which day, and who to drop). The Claude Code skill `.claude/skills/matchup-plan`
+runs it and summarizes the result.
+
+```bash
+python analysis/matchup_plan.py                     # current week, team 4
+python analysis/matchup_plan.py --week 6            # next week's matchup, planned in advance
+python analysis/matchup_plan.py --avail "Darius Garland=0.5" --keep "Cameron Boozer"
+```
+
+How it works:
+
+1. **Projection:** each player's per-game line is a weighted average of this season's games
+   (weights halve every 15 games back), shrunk toward last season's line. His chance of playing each
+   scheduled game comes from injury status and the share of his team's last 10 games he played.
+2. **The week so far:** actual stats of both teams' starters on the days already played.
+3. **Rest of the week:** a Monte Carlo simulation over the real NBA schedule. Every day each team
+   starts its best legal lineup (PG SG SF PF C UT UT) from the players who play that day. Per-game
+   stats are Poisson, with a shared per-game factor so a player's categories move together.
+4. **Matchup-tuned lineups:** the opponent is assumed to rank players by 9-cat value. My team
+   weighs each category by its leverage: the chance it decides the week times how close it is.
+   Locked and lost categories drop out. A player whose tuned value is negative is better on the
+   bench (for example, a poor shooter when FG% decides the week). The output compares P(win week)
+   with these lineups against starting by plain 9-cat value.
+5. **Waiver wire:** every free agent, every droppable player (the lowest 9-cat values, injuries
+   ignored, so a hurt star is never offered) and every possible add day are screened by the change
+   in expected lineup value, positions included. The best few are simulated in full against the
+   same opponent draws. Adds are chained greedily up to `--max-adds`.
+
+The output covers the categories (so far, projected, P(win), weight), games left per day for both
+teams, a lineup for each day (bench order, open slots, changes from the 9-cat default) and the best
+adds ranked by ΔP(win week). It is read-only: make the moves on ESPN. Run `python -m fbb.refresh`
+first so rosters and injuries are current.
+
 ### Notebooks
 
 | Notebook | What it answers |
