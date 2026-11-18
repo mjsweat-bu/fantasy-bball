@@ -5,45 +5,52 @@
     python -m fbb.refresh --history        -> load every season the league has existed
     python -m fbb.refresh --skip-load      -> rebuild only (no API calls)
 
-Run from anywhere; the database container must be up (docker compose up -d).
+Run from anywhere. Connects through fbb.db: DATABASE_URL (Neon) if set, otherwise the
+local Docker database. No psql or Docker CLI needed.
 Each build script runs in a transaction, so a failure leaves that table as it was.
 """
-import argparse, subprocess, sys, time
+import argparse, sys, time
 
 from fbb import config
 from fbb import ingest, ingest_nba
-
-
-def psql(args):
-    """Run psql inside the database container; return (exit code, output)."""
-    cmd = ["docker", "exec", config.DB_CONTAINER, "sh", "-c",
-           'psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" ' + args]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    return r.returncode, r.stdout + r.stderr
+from fbb.db import get_conn
 
 
 def build():
     # numeric order = build order (raw -> core)
     scripts = sorted(config.SQL_BUILD_DIR.glob("[0-9][0-9]_*.sql"))
-    container_dir = f"{config.DB_CONTAINER_SQL_DIR}/{config.SQL_BUILD_DIR.name}"
-    for path in scripts:
-        start = time.time()
-        code, out = psql(f"-1 -f {container_dir}/{path.name}")
-        if code != 0:
-            print(f"--- FAIL  {path.name}")
-            print("\n".join(l for l in out.splitlines() if "ERROR" in l) or out)
-            sys.exit(1)
-        print(f"--- built {path.name} ({time.time() - start:.0f}s)")
+    conn = get_conn()
+    try:
+        for path in scripts:
+            start = time.time()
+            try:
+                with conn:                      # one transaction per script (commit / rollback)
+                    with conn.cursor() as cur:
+                        cur.execute(path.read_text())
+            except Exception as e:
+                print(f"--- FAIL  {path.name}")
+                print(str(e).strip())
+                sys.exit(1)
+            print(f"--- built {path.name} ({time.time() - start:.0f}s)")
+    finally:
+        conn.close()
 
 
 def summary():
-    code, out = psql("""-A -c "
-        SELECT s.season, s.league_name, s.scoring_type, s.num_teams,
-               (SELECT count(*) FROM core.matchups m WHERE m.season = s.season) AS matchups,
-               (SELECT count(*) FROM core.player_days d WHERE d.season = s.season) AS player_days,
-               (SELECT count(*) FROM core.transactions t WHERE t.season = s.season) AS transactions
-        FROM core.seasons s ORDER BY s.season" """)
-    print(out.strip())
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT s.season, s.league_name, s.scoring_type, s.num_teams,
+                       (SELECT count(*) FROM core.matchups m WHERE m.season = s.season) AS matchups,
+                       (SELECT count(*) FROM core.player_days d WHERE d.season = s.season) AS player_days,
+                       (SELECT count(*) FROM core.transactions t WHERE t.season = s.season) AS transactions
+                FROM core.seasons s ORDER BY s.season""")
+            print("|".join(d[0] for d in cur.description))
+            for row in cur.fetchall():
+                print("|".join(str(v) for v in row))
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

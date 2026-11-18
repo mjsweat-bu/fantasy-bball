@@ -2,6 +2,9 @@
 
     from fbb.db import engine, read_query
     df = read_query("standings.sql", season=2027)
+
+Connects to DATABASE_URL when it's set (hosted Postgres such as Neon), otherwise to
+the local Docker database from the POSTGRES_* settings in .env.
 """
 import re
 from pathlib import Path
@@ -9,17 +12,35 @@ from pathlib import Path
 import pandas as pd
 import psycopg2
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 
 from fbb import config
 
-engine = create_engine(
-    f"postgresql+psycopg2://{config.DB_USER}:{config.DB_PASSWORD}"
-    f"@{config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME}"
-)
+
+def _libpq_url(url):
+    """A DATABASE_URL in the form libpq/psycopg2 accepts (postgresql://...)."""
+    return re.sub(r"^postgres(ql)?(\+\w+)?://", "postgresql://", url)
+
+
+def _sqlalchemy_url():
+    if config.DATABASE_URL:
+        return _libpq_url(config.DATABASE_URL).replace("postgresql://", "postgresql+psycopg2://", 1)
+    # URL.create quotes special characters in the password
+    return URL.create(
+        "postgresql+psycopg2",
+        username=config.DB_USER, password=config.DB_PASSWORD,
+        host=config.DB_HOST, port=config.DB_PORT, database=config.DB_NAME,
+    )
+
+
+# pool_pre_ping: hosted databases (Neon) suspend when idle and drop open connections
+engine = create_engine(_sqlalchemy_url(), pool_pre_ping=True)
 
 
 def get_conn():
     """A raw psycopg2 connection (for bulk inserts in the ingest script)."""
+    if config.DATABASE_URL:
+        return psycopg2.connect(_libpq_url(config.DATABASE_URL))
     return psycopg2.connect(
         host=config.DB_HOST, port=config.DB_PORT,
         dbname=config.DB_NAME, user=config.DB_USER, password=config.DB_PASSWORD,
