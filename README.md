@@ -144,6 +144,8 @@ the week's category totals and the free-agent pool change during the day.
 ```bash
 python analysis/daily_lineup.py --team 4              # Markdown report on stdout
 python analysis/daily_lineup.py --team 4 --out today.md
+python analysis/daily_lineup.py --team 4 --week 6     # preview next week's matchup
+python analysis/daily_lineup.py --team 4 --avail "Darius Garland=0.5" --keep "Tyrese Proctor"
 ```
 
 1. **Lines:** each player's per-game stats blend this season, the last 15 days and ESPN's projection;
@@ -157,6 +159,15 @@ python analysis/daily_lineup.py --team 4 --out today.md
 4. **Waiver wire:** the most promising free agents are swapped in for each of your weakest
    droppable players (by season-long value, so injured stars are never suggested as drops), every
    remaining day is re-planned, and swaps are ranked by the change in P(win week).
+5. **When to add:** each swap is tried on every day it could happen. Before it the dropped player
+   still plays, after it the free agent does. The report gives the best day and the latest day
+   that's just as good. Once today's first game has tipped, adds count from tomorrow.
+
+The report shows today's lineup and a lineup for each remaining day (bench order, open slots).
+`--week N` previews a later matchup from today's rosters, so you can plan pickups days ahead.
+`--avail "Name=p"` sets a player's chance of playing each game (injury news newer than ESPN's tag),
+and `--keep` protects players from being suggested as drops. The Claude Code skill
+`.claude/skills/matchup-plan` runs it and summarizes the result.
 
 Prints `NO_GAMES` when there are no NBA games today or no matchup this week. A scheduled cloud
 session runs it every morning (the environment must allow `lm-api-reads.fantasy.espn.com`).

@@ -38,8 +38,8 @@ Public repo that doubles as a portfolio: keep secrets, connection strings and pr
 ## Query gotchas
 - FG%/FT%: sum makes and attempts, then divide. Never average percentages.
 - Names: `core.players` / `core.rosters` / `core.player_days` use `player_name` (not `full_name`).
-- Team abbreviations: ESPN tables use PHL / PHO; NBA tables (`core.player_games`,
-  `core.team_schedule`) use PHI / PHX.
+- Team abbreviations: ESPN tables (`core.players`, `core.team_schedule`) use PHL / PHO;
+  `core.player_games` (stats.nba.com) uses PHI / PHX (`core.nba_team_abbrev()` converts).
 - Stat names differ by source: ESPN `stats` jsonb keys are `'PTS'`, `'3PM'`, `'TO'`, `'FGM'`...
   (`stats->>'3PM'`); NBA columns are lowercase `pts`, `fg3m`, `tov`, `fgm`.
 - ESPN ↔ NBA player ids: join through `ref.player_xwalk` (`espn_player_id`, `nba_player_id`);
