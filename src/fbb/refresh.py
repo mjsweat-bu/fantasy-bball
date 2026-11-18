@@ -14,6 +14,14 @@ import argparse, sys, time
 
 from fbb import config
 from fbb import ingest, ingest_nba, validate
+
+
+def psql(args):
+    """Run psql inside the database container; return (exit code, output)."""
+    cmd = ["docker", "exec", config.DB_CONTAINER, "sh", "-c",
+           'psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" ' + args]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
 from fbb.db import get_conn
 
 
