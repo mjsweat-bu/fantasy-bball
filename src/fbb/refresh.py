@@ -8,11 +8,12 @@
 Run from anywhere. Connects through fbb.db: DATABASE_URL (Neon) if set, otherwise the
 local Docker database. No psql or Docker CLI needed.
 Each build script runs in a transaction, so a failure leaves that table as it was.
+After the build, the data checks in fbb.validate run; a failed check exits with code 1.
 """
 import argparse, sys, time
 
 from fbb import config
-from fbb import ingest, ingest_nba
+from fbb import ingest, ingest_nba, validate
 from fbb.db import get_conn
 
 
@@ -67,3 +68,5 @@ if __name__ == "__main__":
         ingest_nba.main([str(a.season)])   # NBA game logs; backfill with python -m fbb.ingest_nba 2022 2027
     build()
     summary()
+    if not validate.run():
+        sys.exit(1)

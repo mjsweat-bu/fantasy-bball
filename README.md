@@ -30,6 +30,7 @@ They expire every few months; refresh them if loads start returning 401.
 python -m fbb.refresh --history     # first time: every season the league has existed
 python -m fbb.refresh               # daily: current season (new days + last 3 refetched)
 python -m fbb.refresh --skip-load   # rebuild tables only
+python -m fbb.validate              # data checks only (also run at the end of every refresh)
 ```
 
 Seasons are named by the year they end (2026-27 = **2027**). Full detail (daily box scores,
@@ -63,6 +64,7 @@ game type. Backfill with `python -m fbb.ingest_nba 2022 2027`; `fbb.refresh` kee
 | Table | Grain |
 |---|---|
 | `core.player_games` | NBA player × game: `season_type` (Regular Season / Play-In / Playoffs), opponent, home/away, minutes, box score, `espn_player_id`, ESPN `scoring_period` |
+| `core.team_schedule` | NBA team × game: opponent, home/away, fantasy week, previous game, `days_since_last_game`, `is_back_to_back` (every game appears twice, once per side) |
 | `ref.player_xwalk` | NBA player id ↔ ESPN player id, with `match_method` (manual / name / name_team) |
 | `ref.player_xwalk_manual` | your hand fixes, kept across rebuilds |
 | `core.xwalk_unmatched` | NBA players with no ESPN match, most minutes first |
