@@ -7,11 +7,12 @@
 
 Run from anywhere; the database container must be up (docker compose up -d).
 Each build script runs in a transaction, so a failure leaves that table as it was.
+After the build, the data checks in fbb.validate run; a failed check exits with code 1.
 """
 import argparse, subprocess, sys, time
 
 from fbb import config
-from fbb import ingest, ingest_nba
+from fbb import ingest, ingest_nba, validate
 
 
 def psql(args):
@@ -60,3 +61,5 @@ if __name__ == "__main__":
         ingest_nba.main([str(a.season)])   # NBA game logs; backfill with python -m fbb.ingest_nba 2022 2027
     build()
     summary()
+    if not validate.run():
+        sys.exit(1)

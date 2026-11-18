@@ -23,7 +23,6 @@ WHERE (t ->> 'id')::int <> 0                -- id 0 is "FA" (free agents), not a
   AND s.season >= 2022                      -- NBA game logs start in 2021-22; 2021 also has a
                                             -- ghost postponed game (CHA, 2021-02-07, listed twice)
 ),
-
 -- Your turn, building on SCHEDULE:
 --   team / opponent      join ref.pro_teams twice (pro_team_id, and the other side's id)
 --   is_home              home_team_id = pro_team_id
@@ -36,22 +35,31 @@ TEAM_SCHEDULES as (
         s.espn_game_id                                                      as espn_game_id,
         s.pro_team_id                                                       as pro_team_id,
         tm.abbrev                                                           as team,
-        opp.abbrev                                                           as opponent,
+        opp.abbrev                                                          as opponent,
         CASE WHEN s.pro_team_id = s.home_team_id THEN TRUE ELSE FALSE END   as is_home,
         s.game_date                                                         as game_date,
         TO_CHAR(s.game_date, 'Dy')                                          as day_of_week,
-        m.matchup_period                                                    as matchup_period
+        m.matchup_period                                                    as matchup_period,
+        lag(s.game_date) OVER (PARTITION BY s.pro_team_id ORDER BY s.game_date) AS prev_game_date
     FROM SCHEDULE s
     LEFT JOIN ref.pro_teams tm  ON tm.pro_team_id  = s.pro_team_id
     LEFT JOIN ref.pro_teams opp ON opp.pro_team_id =
         CASE WHEN s.pro_team_id = s.home_team_id THEN s.away_team_id ELSE s.home_team_id END
     LEFT JOIN raw.espn_matchup_days m ON s.season = m.season AND s.scoring_period = m.scoring_period
-    
 )
-
-
-SELECT *
+SELECT
+    *,
+    CASE WHEN COALESCE(game_date - prev_game_date,0) <> 1 THEN FALSE ELSE TRUE END as is_back_to_back,
+    game_date - prev_game_date as days_rest
 FROM TEAM_SCHEDULES
 ORDER BY season, pro_team_id, game_date
-LIMIT 50;
+
+-- SELECT
+--     pro_team_id, game_date,
+--     count(*)    OVER (PARTITION BY pro_team_id) as number_count,
+--     row_number() OVER (PARTITION BY pro_team_id ORDER BY game_date) as game_num,
+--     lag(game_date) OVER (PARTITION BY pro_team_id ORDER BY game_date) as prev_game_date
+-- FROM SCHEDULE s
+-- WHERE pro_team_id = 1
+
 
