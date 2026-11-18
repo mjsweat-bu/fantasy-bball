@@ -3,5 +3,10 @@
     "commit": "",
     "pr": "",
     "sessionUrl": false
+  },
+  "permissions": {
+    "allow": [
+      "mcp__Neon__run_sql"
+    ]
   }
 }
