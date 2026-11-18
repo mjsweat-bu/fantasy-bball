@@ -135,6 +135,32 @@ Player ages come from stats.nba.com and are cached in `data/nba_player_seasons.c
 (`--refresh-ages` refetches them). A worked example is in
 [`docs/trade_2026-11-16_boozer_brown.md`](docs/trade_2026-11-16_boozer_brown.md).
 
+### Daily lineup report: `analysis/daily_lineup.py`
+
+Who to start today to win this week's matchup, and which free agents would help more than someone
+on the roster. Reads ESPN live (`fbb.espn_live`), not the database, because lineups, injury tags,
+the week's category totals and the free-agent pool change during the day.
+
+```bash
+python analysis/daily_lineup.py --team 4              # Markdown report on stdout
+python analysis/daily_lineup.py --team 4 --out today.md
+```
+
+1. **Lines:** each player's per-game stats blend this season, the last 15 days and ESPN's projection;
+   ESPN's injury tag sets the chance he plays (OUT = 0, DTD = 65%).
+2. **Rest of week:** every remaining day of the matchup, both teams start their best legal lineup
+   from the players whose NBA team plays. Added to the totals so far, that gives each category's
+   win probability and the chance of winning the week.
+3. **Leverage:** a category already decided is worth nothing; a close one is worth a lot. Today's
+   lineup maximizes the projected lines weighted by how much each category moves P(win week), so it
+   can sit a high-turnover or low-FG% player when those categories are close.
+4. **Waiver wire:** the most promising free agents are swapped in for each of your weakest
+   droppable players (by season-long value, so injured stars are never suggested as drops), every
+   remaining day is re-planned, and swaps are ranked by the change in P(win week).
+
+Prints `NO_GAMES` when there are no NBA games today or no matchup this week. A scheduled cloud
+session runs it every morning (the environment must allow `lm-api-reads.fantasy.espn.com`).
+
 ### Notebooks
 
 | Notebook | What it answers |
