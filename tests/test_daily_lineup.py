@@ -136,7 +136,8 @@ class FakeLive:
 
     def day(self, sp):
         score = lambda pts: {"cumulativeScore": {"scoreByStat": {"0": {"score": pts}, "6": {"score": 20}}}}  # noqa: E731
-        return [{"matchupPeriodId": 2, "home": {"teamId": 4, **score(100)}, "away": {"teamId": 6, **score(90)}}]
+        return [{"matchupPeriodId": self.matchup_period_of(sp),
+                 "home": {"teamId": 4, **score(100)}, "away": {"teamId": 6, **score(90)}}]
 
     def free_agents(self, sp):
         return self.fas
@@ -162,3 +163,72 @@ def test_report_end_to_end():
 def test_no_games_today_is_quiet():
     md, reason = dl.build(FakeLive(games_today=False), team_id=4)
     assert md is None and "no NBA games" in reason
+
+
+def test_after_first_tip_adds_count_from_tomorrow():
+    late = dl.datetime(2030, 1, 1, tzinfo=dl.timezone.utc)          # long after every fake tip-off
+    md, _ = dl.build(FakeLive(), team_id=4, now=late)
+    waiver = md.split("## Waiver wire")[1]
+    assert "adds count from tomorrow" in waiver
+    assert "| today" not in waiver
+
+
+def test_rest_of_week_and_avail_override():
+    md, _ = dl.build(FakeLive(), team_id=4, avail={"Mine 0": 0.0})
+    rest = md.split("## Rest of the week")[1].split("## Categories")[0]
+    assert rest.count("\n| ") >= 3                                 # header row + one row per later day
+    start = md.split("## Start today")[1].split("##")[0]
+    assert not [ln for ln in start.splitlines() if ln.startswith("| ") and "Mine 0" in ln]   # ruled out
+    assert "Mine 0 (--avail)" in start
+
+
+def test_preview_of_a_later_week():
+    md, summary = dl.build(FakeLive(), team_id=4, week_no=3)
+    assert md is not None, summary
+    assert md.startswith("# Preview: week 3, Me vs Them")
+    cats = md.split("## Categories")[1].split("Swing ●")[0]
+    assert "| — | — |" in cats                                      # nothing played yet
+
+
+# --- add-day timing ------------------------------------------------------------------
+
+def timing_case(fa_days):
+    """One UT slot. My weak player plays days 1-2; the free agent plays fa_days."""
+    def p(pid, name, days, pts, status=""):
+        x = player(pid, [0], pts=pts, reb=pts / 3)
+        x.name, x.games, x.fa_status = name, {sp: {} for sp in days}, status
+        return x
+    star = p(1, "Star", [], 30)                  # rostered, never plays this week
+    weak = p(2, "Weak", [1, 2], 4)
+    fa = p(3, "Streamer", fa_days, 20, "FREEAGENT")
+    opp = [p(9, "Opp", [1, 2, 3], 12)]
+    week = dl.Week(season=SEASON, today=1, days=[1, 2, 3], cats=CATS, reverse={dl.TO}, slots=[11],
+                   me={}, opp={}, my_team={}, opp_team={}, matchup_period=2)
+    scale = dl.generic_scaler([star, weak, fa] + opp, CATS, {dl.TO})
+    for x in (star, weak, fa):
+        x.season_value = dl.generic_value(x, CATS, {dl.TO}, scale)
+    gen = lambda x: dl.generic_value(x, CATS, {dl.TO}, scale) + 10.0   # noqa: E731
+    opp_lineups, _ = dl.plan(opp, week.days, week.slots, gen, allow_empty=False)
+    base = dl.solve(week, [star, weak], opp_lineups, scale)
+    return week, [star, weak], [fa], opp_lineups, base, scale
+
+
+def test_add_day_waits_for_the_dropped_players_last_game():
+    week, mine, fas, opp_lineups, base, scale = timing_case(fa_days=[3])
+    _, picks = dl.waiver_moves(week, mine, fas, opp_lineups, base, scale)
+    assert picks and picks[0].drop.name == "Weak"
+    assert picks[0].add_day == 3 and picks[0].drop_games_lost == 0   # Weak plays days 1-2 first
+
+
+def test_add_day_is_today_when_the_free_agent_plays_now():
+    week, mine, fas, opp_lineups, base, scale = timing_case(fa_days=[1, 2, 3])
+    _, picks = dl.waiver_moves(week, mine, fas, opp_lineups, base, scale)
+    assert picks and picks[0].add_day == 1 and picks[0].games_left == 3
+    _, kept = dl.waiver_moves(week, mine, fas, opp_lineups, base, scale, keep={"Weak"})
+    assert all(x.drop.name != "Weak" for x in kept)
+
+
+def test_week_flag_plans_even_without_games_today():
+    md, reason = dl.build(FakeLive(games_today=False), team_id=4, week_no=2)
+    assert md is not None, reason
+    assert "## Rest of the week" in md

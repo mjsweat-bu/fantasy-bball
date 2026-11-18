@@ -4,6 +4,8 @@ free agents would help more than someone on the roster.
     python analysis/daily_lineup.py --team 4                # today's report (Markdown, stdout)
     python analysis/daily_lineup.py --team 4 --out report.md
     python analysis/daily_lineup.py --team 4 --league 123456
+    python analysis/daily_lineup.py --team 4 --week 6       # preview next week's matchup
+    python analysis/daily_lineup.py --team 4 --avail "Darius Garland=0.5" --keep "Tyrese Proctor"
 
 Reads ESPN live (fbb.espn_live), not the database: lineups, injury tags, the
 week's category totals and the free-agent pool change during the day.
@@ -30,14 +32,19 @@ How it decides:
    as an optional sit.
 5. Waiver wire: for the most promising free agents, swap them for each of your
    weakest droppable players (by season-long value, so injured stars are never
-   suggested as drops), re-plan every remaining day, and rank by the change in
-   P(win week).
+   suggested as drops, and never anyone in --keep) on each day the add could
+   happen, re-plan every remaining day, and rank by the change in P(win week).
+   Before the swap the dropped player still plays, after it the free agent does,
+   so the best add day is reported, with the latest day that's just as good.
+   Once today's first game has tipped, adds count from tomorrow.
+6. --week N previews a later matchup: that opponent, every day of that week,
+   totals starting at zero, today's rosters.
 """
 import argparse
 import math
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -98,10 +105,13 @@ class Player:
     fa_status: str = ""       # FREEAGENT / WAIVERS for unrostered players
     season_value: float = 0.0
     games: dict = field(default_factory=dict)     # scoring period -> game dict
+    avail: float = None       # --avail override of the chance he plays a game
 
     @property
     def play_prob(self):
-        return 0.0 if self.slot == IR else PLAY_PROB.get(self.status, 1.0)
+        if self.slot == IR:
+            return 0.0
+        return self.avail if self.avail is not None else PLAY_PROB.get(self.status, 1.0)
 
     @property
     def tag(self):
@@ -163,6 +173,12 @@ class Week:
     my_team: dict
     opp_team: dict
     matchup_period: int
+    first_add: int = 0         # index into days of the first day an add can play
+    labels: dict = field(default_factory=dict)    # scoring period -> "Thu 11/19"
+    preview: bool = False      # a later week (--week): no games played yet
+
+    def label(self, sp):
+        return self.labels.get(sp, f"day {sp}")
 
 
 def team_name(t):
@@ -406,15 +422,6 @@ def solve(week, mine, opp_lineups, scale, iterations=3):
     return Plan(odds, leverage(week, odds), win, tie, exp, assignments, my_lineups)
 
 
-def evaluate(week, mine, opp_lineups, odds, lev):
-    """P(win week) for a roster, lineups planned with fixed leverage weights."""
-    val = lambda p: leverage_value(p, week, odds, lev)   # noqa: E731
-    lineups, assignments = plan(mine, week.days, week.slots, val, allow_empty=True)
-    o = category_odds(week, lineups, opp_lineups)
-    win, tie, exp = week_odds([o[c]["p"] for c in week.cats])
-    return win, tie, exp, assignments, o
-
-
 # --- waiver wire --------------------------------------------------------------------
 
 @dataclass
@@ -428,36 +435,60 @@ class Pickup:
     plays_today: bool
     starts_today: bool
     helps: list
+    add_day: int = 0          # scoring period to make the move
+    add_by: int = 0           # latest scoring period that's as good
+    drop_games_lost: int = 0  # games the dropped player has from add_day on
 
 
-def waiver_moves(week, mine, free_agents, opp_lineups, base, scale, top=5):
-    """Best add/drop swaps by change in P(win week). Returns (P(win week) as the
-    roster stands, re-planned the same way, [Pickup])."""
+def waiver_moves(week, mine, free_agents, opp_lineups, base, scale, keep=(), top=5):
+    """Best add/drop swaps by change in P(win week), each on its best day. Returns
+    (P(win week) as the roster stands, re-planned the same way, [Pickup])."""
     healthy = [p for p in mine if p.slot != IR]
-    drops = sorted([p for p in healthy if p.droppable], key=lambda p: p.season_value)[:DROP_POOL]
+    drops = sorted([p for p in healthy if p.droppable and p.name not in keep],
+                   key=lambda p: p.season_value)[:DROP_POOL]
     val = lambda p: leverage_value(p, week, base.odds, base.lev)   # noqa: E731
-    # free agents can be added and started today; waiver players can't be (claims
-    # process later), so only free agents are evaluated
-    fas = [p for p in free_agents if p.fa_status == "FREEAGENT" and p.play_prob > 0 and p.games]
-    fas.sort(key=lambda p: -sum(max(val(p), 0) * p.play_prob for sp in week.days if sp in p.games))
-    base_win, _, base_cats, _, _ = evaluate(week, mine, opp_lineups, base.odds, base.lev)
+    days = week.days
+    add_days = range(week.first_add, len(days))
+    # free agents only: a waiver claim clears at an unknown time, so it can't be planned
+    fas = [p for p in free_agents if p.fa_status == "FREEAGENT" and p.play_prob > 0
+           and any(sp in p.games for sp in days[week.first_add:])]
+    fas.sort(key=lambda p: -sum(max(val(p), 0) * p.play_prob for sp in days[week.first_add:] if sp in p.games))
+
+    def odds_of(lineups):
+        o = category_odds(week, lineups, opp_lineups)
+        win, tie, exp = week_odds([o[c]["p"] for c in week.cats])
+        return win, exp, o
+
+    base_lineups, base_assign = plan(mine, days, week.slots, val, allow_empty=True)
+    base_win, base_cats, _ = odds_of(base_lineups)
     out = []
+    if not add_days:
+        return base_win, out
     for fa in fas[:FA_POOL]:
         best = None
         for d in drops:
             roster = [p for p in mine if p.id != d.id] + [fa]
-            win, _, cats, assignments, odds = evaluate(week, roster, opp_lineups, base.odds, base.lev)
-            if best is None or win > best[0]:
-                best = (win, cats, d, assignments, odds)
+            swapped, swapped_assign = plan(roster, days, week.slots, val, allow_empty=True)
+            tries = []
+            for a in add_days:   # before day a the old roster plays, from day a the new one
+                win, cats, odds = odds_of(base_lineups[:a] + swapped[a:])
+                tries.append((win, cats, a, odds))
+            win, cats, a, odds = max(tries, key=lambda t: (t[0] + 0.01 * t[1], -t[2]))
+            if best is None or win + 0.01 * cats > best[0] + 0.01 * best[1]:
+                # latest day that's as good: waiting keeps options open (injury news)
+                by = max(t[2] for t in tries if t[0] >= win - 0.002 and t[1] >= cats - 0.02)
+                best = (win, cats, d, a, by, odds, swapped_assign)
         if best is None:
             continue
-        win, cats, d, assignments, odds = best
+        win, cats, d, a, by, odds, assign = best
         helps = [STAT_NAMES[c] for c in week.cats
                  if (odds[c]["p"] - base.odds[c]["p"]) > 0.02]
         out.append(Pickup(fa, d, win, win - base_win, cats - base_cats,
-                          games_left=sum(1 for sp in week.days if sp in fa.games),
+                          games_left=sum(1 for sp in days[a:] if sp in fa.games),
                           plays_today=week.today in fa.games,
-                          starts_today=fa.id in assignments[0], helps=helps))
+                          starts_today=a == 0 and fa.id in assign[0], helps=helps,
+                          add_day=days[a], add_by=days[by],
+                          drop_games_lost=sum(1 for sp in days[a:] if sp in d.games)))
     out.sort(key=lambda x: (-x.d_win, -x.d_cats))
     return base_win, [x for x in out if x.d_win > 0.001 or x.d_cats > 0.02][:top]
 
@@ -489,7 +520,11 @@ def render(week, mine, opp_lineups, base, pickups, abbrevs, today_date, acq_note
     lines = []
     games_me = sum(len(d) for d in base.lineups)
     opp_games = sum(len(d) for d in opp_lineups)
-    lines.append(f"# {today_date:%a %b %-d}: week {week.matchup_period}, {my} vs {op}")
+    if week.preview:
+        lines.append(f"# Preview: week {week.matchup_period}, {my} vs {op} "
+                     f"({week.label(week.days[0])} - {week.label(week.days[-1])})")
+    else:
+        lines.append(f"# {today_date:%a %b %-d}: week {week.matchup_period}, {my} vs {op}")
     lines.append("")
     lines.append(f"**P(win week): {pct(base.win)}**"
                  + (f" (tie {pct(base.tie)})" if base.tie >= 0.03 else "")
@@ -499,7 +534,7 @@ def render(week, mine, opp_lineups, base, pickups, abbrevs, today_date, acq_note
     lines.append("")
 
     # --- start today
-    lines.append("## Start today")
+    lines.append("## Start today" if not week.preview else f"## Start {week.label(week.today)}")
     lines.append("")
     lines.append("| Slot | Player | Game | Note |")
     lines.append("|---|---|---|---|")
@@ -512,7 +547,7 @@ def render(week, mine, opp_lineups, base, pickups, abbrevs, today_date, acq_note
         note = []
         if p.tag:
             note.append(f"{p.tag}: check status before tip")
-        if p.slot == BENCH:
+        if p.slot == BENCH and not week.preview:
             note.append("**move in** (on your bench)")
         lines.append(f"| {SLOT_NAMES[slot]} | {p.name} | {game_label(p, week.today, abbrevs)} | {'; '.join(note)} |")
         used.add(pid)
@@ -532,17 +567,40 @@ def render(week, mine, opp_lineups, base, pickups, abbrevs, today_date, acq_note
             return f"optional sit: hurts {', '.join(hurt_cats(p, week, base))}"
         return "no slot left"
 
-    move_out = [p for p in mine if p.slot not in (BENCH, IR) and p.id not in used]
+    move_out = [p for p in mine if p.slot not in (BENCH, IR) and p.id not in used and not week.preview]
     if move_out:
         lines.append("**Move to bench:** " + ", ".join(f"{p.name} ({why_sit(p)})" for p in move_out))
-    sitting = [p for p in mine if week.today in p.games and p.id not in used and p.slot == BENCH and p.play_prob > 0]
+    sitting = [p for p in mine if week.today in p.games and p.id not in used
+               and (p.slot == BENCH or week.preview) and p.play_prob > 0]
     if sitting:
         lines.append("**Also has a game, stays benched:** " + ", ".join(
             f"{p.name} ({why_sit(p)})" for p in sorted(sitting, key=lambda p: -val[p.id])))
     out_today = [p for p in mine if week.today in p.games and p.play_prob == 0 and p.slot != IR]
     if out_today:
-        lines.append("**Out:** " + ", ".join(f"{p.name} ({p.status.replace('_', ' ').lower()})" for p in out_today))
+        lines.append("**Out:** " + ", ".join(
+            f"{p.name} ({'--avail' if p.avail is not None else p.status.replace('_', ' ').lower()})" for p in out_today))
     lines.append("")
+
+    # --- the other days
+    if len(week.days) > 1:
+        lines.append("## Rest of the week")
+        lines.append("")
+        lines.append("| Day | Start | Bench, next up first | Open |")
+        lines.append("|---|---|---|---|")
+        for i, sp in enumerate(week.days[1:], 1):
+            assign = base.assignments[i]
+            start = sorted(assign.items(), key=lambda kv: order.get(kv[1], 99))
+            names = ", ".join(f"{SLOT_NAMES[s]} {by_id[pid].name}{'*' if by_id[pid].tag else ''}" for pid, s in start)
+            bench = sorted((p for p in mine if sp in p.games and p.play_prob > 0 and p.id not in assign),
+                           key=lambda p: -val[p.id])
+            open_slots = list(week.slots)
+            for s_ in assign.values():
+                open_slots.remove(s_)
+            lines.append(f"| {week.label(sp)} | {names or '—'} | {', '.join(p.name for p in bench) or '—'} "
+                         f"| {' '.join(SLOT_NAMES[s_] for s_ in open_slots) or '—'} |")
+        lines.append("")
+        lines.append("\\* = injury tag; recheck before that day. Open slots are what a pickup can fill.")
+        lines.append("")
 
     # --- categories
     lines.append("## Categories")
@@ -556,7 +614,8 @@ def render(week, mine, opp_lineups, base, pickups, abbrevs, today_date, acq_note
         so_far = lambda side, c=c: (side.get(RATIO[c][0], 0) / side[RATIO[c][1]]   # noqa: E731
                                     if c in RATIO and side.get(RATIO[c][1]) else side.get(c, 0))
         bar = "●" * round(3 * levs[c] / top) if levs[c] > 0.02 * top else "·"
-        lines.append(f"| {STAT_NAMES[c]} | {fmt_stat(c, so_far(week.me))} | {fmt_stat(c, so_far(week.opp))} "
+        mine_now, opp_now = ("—", "—") if week.preview else (fmt_stat(c, so_far(week.me)), fmt_stat(c, so_far(week.opp)))
+        lines.append(f"| {STAT_NAMES[c]} | {mine_now} | {opp_now} "
                      f"| {fmt_stat(c, o['mine'])} | {fmt_stat(c, o['theirs'])} | {pct(o['p'])} | {bar} |")
     lines.append("")
     lines.append("Swing ●●● = the categories your lineup choices move most; · = already decided.")
@@ -567,15 +626,21 @@ def render(week, mine, opp_lineups, base, pickups, abbrevs, today_date, acq_note
     lines.append("")
     if pickups:
         now = base.win if roster_win is None else roster_win
-        lines.append(f"| Add | Drop | P(win week), now {pct(now)} | Games left | Today | Helps |")
+        lines.append(f"| Add | Drop | When | P(win week), now {pct(now)} | Games left | Helps |")
         lines.append("|---|---|---|---|---|---|")
         for x in pickups:
-            today = game_label(x.add, week.today, abbrevs) if x.plays_today else "no game"
-            if x.starts_today:
-                today += " · **start**"
+            if x.add_day == week.days[0] and not week.preview:
+                when = "today"
+                if x.plays_today:
+                    when += f", {game_label(x.add, week.today, abbrevs)}" + (" · **start**" if x.starts_today else "")
+            else:
+                when = week.label(x.add_day)
+            if x.add_by != x.add_day:
+                when += f" (or by {week.label(x.add_by)})"
             tag = f" ({x.add.tag})" if x.add.tag else ""
-            lines.append(f"| {x.add.name}{tag} | {x.drop.name} | {pct(x.win)} "
-                         f"({x.d_cats:+.2f} cats) | {x.games_left} | {today} | {', '.join(x.helps) or '—'} |")
+            lost = f" (loses {x.drop_games_lost} game{'s' * (x.drop_games_lost != 1)})" if x.drop_games_lost else ""
+            lines.append(f"| {x.add.name}{tag} | {x.drop.name}{lost} | {when} | {pct(x.win)} "
+                         f"({x.d_cats:+.2f} cats) | {x.games_left} | {', '.join(x.helps) or '—'} |")
         lines.append("")
         lines.append(acq_note)
     else:
@@ -588,6 +653,9 @@ def render(week, mine, opp_lineups, base, pickups, abbrevs, today_date, acq_note
         lines.append("**Healthy on IR:** " + ", ".join(p.name for p in healthy_ir)
                      + " (not counted; activate them if you have room)")
         lines.append("")
+    if week.preview:
+        lines.append("_Preview from today's rosters and injury tags; both teams start at zero. "
+                     "Waiver moves are planned for days of that week._")
     lines.append(f"_Live from ESPN {datetime.now(ET):%-I:%M%p ET}. Injury tags change during the day: "
                  "recheck DTD/Q players before tip-off. Lines blend season, last-15 and ESPN projections._")
     return "\n".join(lines)
@@ -609,8 +677,22 @@ def hurt_cats(p, week, base):
 
 # --- main ---------------------------------------------------------------------------
 
-def build(live, team_id, today_date=None):
-    """Everything the report needs. Returns (markdown, summary dict), or (None, reason)."""
+def preview_days(live, today, target, final_period, max_ahead=35):
+    """Scoring periods of a later matchup period, asking ESPN day by day."""
+    days = []
+    for sp in range(today + 1, min(final_period, today + max_ahead) + 1):
+        mp = live.matchup_period_of(sp)
+        if mp == target:
+            days.append(sp)
+        elif days or (mp is not None and mp > target):
+            break
+    return days
+
+
+def build(live, team_id, today_date=None, week_no=None, avail=None, keep=(), now=None):
+    """Everything the report needs. Returns (markdown, summary dict), or (None, reason).
+    week_no: a later matchup period to preview. avail: {name: chance he plays a game}.
+    keep: names never offered as drops."""
     league = live.league()
     season = live.season
     status = league["status"]
@@ -620,10 +702,21 @@ def build(live, team_id, today_date=None):
         return None, "season not active"
 
     pro_teams = live.pro_schedule()
-    if not any(t.get("proGamesByScoringPeriod", {}).get(str(today)) for t in pro_teams):
+    games_today = [g for t in pro_teams for g in t.get("proGamesByScoringPeriod", {}).get(str(today), [])]
+    current = status.get("currentMatchupPeriod")
+    preview = week_no is not None and week_no != current
+    if not games_today and week_no is None:   # quiet for the scheduler; --week plans anyway
         return None, "no NBA games today"
 
-    day = live.day(today)
+    if preview:
+        if current is not None and week_no < current:
+            return None, f"week {week_no} is over"
+        days = preview_days(live, today, week_no, status["finalScoringPeriod"])
+        if not days:
+            return None, f"ESPN has no days for week {week_no} yet"
+        day = live.day(days[0])
+    else:
+        day = live.day(today)
     match = next((m for m in day if team_id in (m["home"]["teamId"], m.get("away", {}).get("teamId"))), None)
     if match is None or "away" not in match:
         return None, "no matchup this week"
@@ -637,11 +730,24 @@ def build(live, team_id, today_date=None):
     cats.sort(key=lambda c: order.index(c) if c in order else 99)
     reverse = {int(i["statId"]) for i in items if i.get("isReverseItem")}
     mp = match["matchupPeriodId"]
-    days = week_days(live, today, mp, status["finalScoringPeriod"])
+    if not preview:
+        days = week_days(live, today, mp, status["finalScoringPeriod"])
 
-    week = Week(season=season, today=today, days=days, cats=cats, reverse=reverse,
-                slots=active_slots(settings), me=totals(me_side), opp=totals(opp_side),
-                my_team=teams[team_id], opp_team=teams[opp_side["teamId"]], matchup_period=mp)
+    # calendar dates: today's games give today's date, and each scoring period is one day
+    now = now or datetime.now(ET)
+    today_date = today_date or (min(datetime.fromtimestamp(g["date"] / 1000, tz=timezone.utc).astimezone(ET)
+                                    for g in games_today).date() if games_today else now.date())
+    labels = {sp: f"{(d := today_date + timedelta(days=sp - today)):%a} {d.month}/{d.day}" for sp in days}
+    # adds lock at the day's first tip-off: after it, a pickup plays from tomorrow
+    tipped = bool(games_today) and now >= min(
+        datetime.fromtimestamp(g["date"] / 1000, tz=timezone.utc) for g in games_today)
+    first_add = 1 if (not preview and tipped) else 0
+
+    week = Week(season=season, today=days[0], days=days, cats=cats, reverse=reverse,
+                slots=active_slots(settings),
+                me={} if preview else totals(me_side), opp={} if preview else totals(opp_side),
+                my_team=teams[team_id], opp_team=teams[opp_side["teamId"]], matchup_period=mp,
+                first_add=first_add, labels=labels, preview=preview)
 
     def roster(team):
         out = []
@@ -658,6 +764,9 @@ def build(live, team_id, today_date=None):
     free_agents = [p for p in (make_player(e, season) for e in live.free_agents(today))
                    if p and p.id not in rostered]
     attach_games(mine + opp + free_agents, pro_teams, days)
+    for p in mine + opp + free_agents:
+        if avail and p.name in avail:
+            p.avail = float(avail[p.name])
 
     scale = generic_scaler(everyone, cats, reverse)
     for p in mine + free_agents:
@@ -666,7 +775,7 @@ def build(live, team_id, today_date=None):
     gen = lambda p: generic_value(p, cats, reverse, scale) + 10.0   # noqa: E731
     opp_lineups, _ = plan(opp, days, week.slots, gen, allow_empty=False)
     base = solve(week, mine, opp_lineups, scale)
-    roster_win, pickups = waiver_moves(week, mine, free_agents, opp_lineups, base, scale)
+    roster_win, pickups = waiver_moves(week, mine, free_agents, opp_lineups, base, scale, keep=set(keep))
 
     acq = settings.get("acquisitionSettings", {})
     limit = acq.get("matchupAcquisitionLimit", -1)
@@ -678,15 +787,16 @@ def build(live, team_id, today_date=None):
     else:
         acq_note = ""
     acq_note += " Free agents only: players on waivers can't play until their claim clears."
+    if first_add:
+        acq_note += " Today's first game has tipped, so adds count from tomorrow."
 
     abbrevs = {t["id"]: t["abbrev"] for t in pro_teams}
-    today_date = today_date or next(
-        datetime.fromtimestamp(g[0]["date"] / 1000, tz=timezone.utc).astimezone(ET).date()
-        for t in pro_teams if (g := t.get("proGamesByScoringPeriod", {}).get(str(today))))
     md = render(week, mine, opp_lineups, base, pickups, abbrevs, today_date, acq_note, roster_win)
     summary = dict(win=base.win, cats=base.exp_cats, opponent=team_name(week.opp_team),
                    moves=[f"start {p.name}" for p in mine if p.id in base.assignments[0] and p.slot == BENCH],
-                   pickup=(f"add {pickups[0].add.name} / drop {pickups[0].drop.name}" if pickups else None))
+                   pickup=(f"add {pickups[0].add.name} / drop {pickups[0].drop.name}"
+                           + ("" if pickups[0].add_day == days[0] and not preview
+                              else f" on {week.label(pickups[0].add_day)}") if pickups else None))
     return md, summary
 
 
@@ -696,11 +806,16 @@ def main(argv=None):
     ap.add_argument("--league", type=int, default=None, help="ESPN league id (default: ESPN_LEAGUE_ID)")
     ap.add_argument("--season", type=int, default=config.current_season())
     ap.add_argument("--out", type=Path, help="also write the Markdown report here")
+    ap.add_argument("--week", type=int, help="preview a later matchup period (default: this week)")
+    ap.add_argument("--avail", action="append", default=[], metavar='"NAME=P"',
+                    help="chance he plays each game, e.g. \"Darius Garland=0.5\" (repeatable)")
+    ap.add_argument("--keep", nargs="+", default=[], metavar="NAME", help="never suggest dropping these players")
     a = ap.parse_args(argv)
+    avail = {k.strip(): float(v) for k, v in (x.rsplit("=", 1) for x in a.avail)}
 
     from fbb.espn_live import LiveLeague
     live = LiveLeague(league_id=a.league, season=a.season)
-    md, summary = build(live, a.team)
+    md, summary = build(live, a.team, week_no=a.week, avail=avail, keep=a.keep)
     if md is None:
         print(f"NO_GAMES: {summary}")
         return 0
