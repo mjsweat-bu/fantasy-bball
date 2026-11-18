@@ -8,6 +8,9 @@ Public repo that doubles as a portfolio: keep secrets, connection strings and pr
   The owner merges. At the start of a session: `git checkout main && git pull`.
 - Python runs from the venv: `.venv\Scripts\python ...` on Windows, `.venv/bin/python ...` elsewhere.
   A bare `python` gives "No module named fbb".
+- Cloud sessions install the slim set: `python3 -m venv .venv && .venv/bin/pip install -r requirements-analysis.txt`
+  (the environment's setup script does this). Pins must match `requirements.txt`; when you bump a
+  version in one, bump it in the other (`tests/test_requirements.py` fails otherwise).
 - Tests: `python -m pytest` (offline, no database needed).
 - Keep answers short and lead with the result.
 

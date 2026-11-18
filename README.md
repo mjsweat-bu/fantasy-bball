@@ -16,6 +16,10 @@ cp .env.example .env            # set a password
 cp .api.env.example .api.env    # league id, and cookies for a private league
 ```
 
+Analysis only (no ESPN/NBA loading, Jupyter UI or ML libraries, e.g. a cloud session):
+`pip install -r requirements-analysis.txt` instead. It installs in about 15 seconds; its versions
+match `requirements.txt`, and `tests/test_requirements.py` keeps the two in sync.
+
 **Database:** set `DATABASE_URL` in `.env` to the Neon connection string (`...?sslmode=require`).
 Everything (refresh, ingest, `read_query`, `trade_eval.py`, notebooks) connects there, and no Docker is needed.
 For a local database instead, leave `DATABASE_URL` unset and run `docker compose up -d` (Postgres 16 on localhost:5433).
