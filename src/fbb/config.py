@@ -18,7 +18,7 @@ load_dotenv(ROOT / ".api.env")
 SQL_BUILD_DIR = ROOT / "sql" / "build"          # pipeline scripts, run in numeric order
 SQL_ANALYSIS_DIR = ROOT / "sql" / "analysis"    # ad-hoc and report queries
 
-# database (Postgres in Docker; see docker-compose.yml)
+# local database (Postgres in Docker; see docker-compose.yml), used when DATABASE_URL is unset
 DB_CONTAINER = "fbb-postgres"
 DB_CONTAINER_SQL_DIR = "/sql"                   # ./sql is mounted here in the container
 DB_HOST = os.environ.get("POSTGRES_HOST", "localhost")
