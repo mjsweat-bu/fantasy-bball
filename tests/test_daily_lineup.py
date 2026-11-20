@@ -232,3 +232,28 @@ def test_week_flag_plans_even_without_games_today():
     md, reason = dl.build(FakeLive(games_today=False), team_id=4, week_no=2)
     assert md is not None, reason
     assert "## Rest of the week" in md
+
+
+def test_solve_keeps_the_best_plan_when_releveraging_backfires(monkeypatch):
+    """Re-planning by leverage can swing to a worse plan (a big lead makes counting stats
+    worth ~0, so it benches everyone). solve must report the best plan it tried, not the last."""
+    me = player(1, [0], pts=30, reb=10, ast=8, tpm=3, stl=2, blk=1, to=1, fgm=11, fga=20, ftm=5, fta=6)
+    opp = player(9, [0], pts=10, reb=3, ast=2, tpm=1, stl=0.5, blk=0.2, to=3, fgm=4, fga=11, ftm=1, fta=2)
+    for x in (me, opp):
+        x.games = {sp: {} for sp in (1, 2, 3)}
+    week = dl.Week(season=SEASON, today=1, days=[1, 2, 3], cats=CATS, reverse={dl.TO}, slots=[11],
+                   me={}, opp={}, my_team={}, opp_team={}, matchup_period=2)
+    scale = dl.generic_scaler([me, opp], CATS, {dl.TO})
+    gen = lambda x: dl.generic_value(x, CATS, {dl.TO}, scale) + 10.0   # noqa: E731
+    opp_lineups, _ = dl.plan([opp], week.days, week.slots, gen, allow_empty=False)
+
+    real_plan = dl.plan
+    def benching_plan(players, days, slots, value_fn, allow_empty):
+        if allow_empty:                                   # every leverage re-plan benches everyone
+            return [[] for _ in days], [{} for _ in days]
+        return real_plan(players, days, slots, value_fn, allow_empty)
+    monkeypatch.setattr(dl, "plan", benching_plan)
+
+    base = dl.solve(week, [me], opp_lineups, scale)
+    assert base.win > 0.9
+    assert all(len(day) == 1 for day in base.lineups)    # the full lineup, not the empty one

@@ -29,7 +29,9 @@ How it decides:
    value on a day is his projected line times those weights (FG%/FT% by makes
    above your team's rate on his attempts). Today's lineup maximizes that value.
    A player with negative value (he mostly hurts close FG%/FT%/TO) is flagged
-   as an optional sit.
+   as an optional sit. Re-weighting can swing between plans (a big lead makes
+   counting stats worth ~0, so the next plan benches people and loses the lead),
+   so every plan tried is scored and the one with the best P(win week) is kept.
 5. Waiver wire: for the most promising free agents, swap them for each of your
    weakest droppable players (by season-long value, so injured stars are never
    suggested as drops, and never anyone in --keep) on each day the add could
@@ -409,17 +411,26 @@ class Plan:
 
 
 def solve(week, mine, opp_lineups, scale, iterations=3):
-    """Plan my lineups for the rest of the week around category leverage."""
+    """Plan my lineups for the rest of the week around category leverage.
+
+    Starts from everyone's best generic lineup, then re-plans with the leverage of
+    the last plan. That step can swing: a big lead makes counting stats worth ~0,
+    so the next plan benches players to protect FG%/FT%, loses the lead, and so on.
+    Every plan tried is scored, and the one with the best P(win week) is kept."""
     gen = lambda p: generic_value(p, week.cats, week.reverse, scale) + 10.0   # noqa: E731
     my_lineups, assignments = plan(mine, week.days, week.slots, gen, allow_empty=False)
-    for _ in range(iterations):
+    best = None
+    for i in range(iterations + 1):
         odds = category_odds(week, my_lineups, opp_lineups)
-        lev = leverage(week, odds)
-        val = lambda p, odds=odds, lev=lev: leverage_value(p, week, odds, lev)   # noqa: E731
+        win, tie, exp = week_odds([odds[c]["p"] for c in week.cats])
+        cand = Plan(odds, leverage(week, odds), win, tie, exp, assignments, my_lineups)
+        if best is None or (win + 0.5 * tie, exp) > (best.win + 0.5 * best.tie, best.exp_cats):
+            best = cand
+        if i == iterations:
+            break
+        val = lambda p, odds=odds, lev=cand.lev: leverage_value(p, week, odds, lev)   # noqa: E731
         my_lineups, assignments = plan(mine, week.days, week.slots, val, allow_empty=True)
-    odds = category_odds(week, my_lineups, opp_lineups)
-    win, tie, exp = week_odds([odds[c]["p"] for c in week.cats])
-    return Plan(odds, leverage(week, odds), win, tie, exp, assignments, my_lineups)
+    return best
 
 
 # --- waiver wire --------------------------------------------------------------------
@@ -442,7 +453,8 @@ class Pickup:
 
 def waiver_moves(week, mine, free_agents, opp_lineups, base, scale, keep=(), top=5):
     """Best add/drop swaps by change in P(win week), each on its best day. Returns
-    (P(win week) as the roster stands, re-planned the same way, [Pickup])."""
+    (P(win week) as the roster stands, i.e. base.win, [Pickup]). Each swapped roster is
+    planned with solve(), like the baseline."""
     healthy = [p for p in mine if p.slot != IR]
     drops = sorted([p for p in healthy if p.droppable and p.name not in keep],
                    key=lambda p: p.season_value)[:DROP_POOL]
@@ -459,8 +471,8 @@ def waiver_moves(week, mine, free_agents, opp_lineups, base, scale, keep=(), top
         win, tie, exp = week_odds([o[c]["p"] for c in week.cats])
         return win, exp, o
 
-    base_lineups, base_assign = plan(mine, days, week.slots, val, allow_empty=True)
-    base_win, base_cats, _ = odds_of(base_lineups)
+    # the baseline is the headline plan, so "now" in the report matches P(win week)
+    base_lineups, base_win, base_cats = base.lineups, base.win, base.exp_cats
     out = []
     if not add_days:
         return base_win, out
@@ -468,7 +480,8 @@ def waiver_moves(week, mine, free_agents, opp_lineups, base, scale, keep=(), top
         best = None
         for d in drops:
             roster = [p for p in mine if p.id != d.id] + [fa]
-            swapped, swapped_assign = plan(roster, days, week.slots, val, allow_empty=True)
+            swapped_plan = solve(week, roster, opp_lineups, scale)   # same planner as the baseline
+            swapped, swapped_assign = swapped_plan.lineups, swapped_plan.assignments
             tries = []
             for a in add_days:   # before day a the old roster plays, from day a the new one
                 win, cats, odds = odds_of(base_lineups[:a] + swapped[a:])
@@ -489,7 +502,8 @@ def waiver_moves(week, mine, free_agents, opp_lineups, base, scale, keep=(), top
                           starts_today=a == 0 and fa.id in assign[0], helps=helps,
                           add_day=days[a], add_by=days[by],
                           drop_games_lost=sum(1 for sp in days[a:] if sp in d.games)))
-    out.sort(key=lambda x: (-x.d_win, -x.d_cats))
+    # same score as each player's best swap: near 0% or 100%, P(win) barely moves, so categories decide
+    out.sort(key=lambda x: -(x.d_win + 0.01 * x.d_cats))
     return base_win, [x for x in out if x.d_win > 0.001 or x.d_cats > 0.02][:top]
 
 
