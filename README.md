@@ -94,6 +94,23 @@ Use `read_sql` rather than `pd.read_sql(sql, engine)` so the code also runs over
 
 ## Analysis
 
+### Start/sit: `analysis/lineup.py`
+
+Picks the lineup for one day that gives the best chance to win the current week's matchup.
+
+```bash
+python analysis/lineup.py --team 4                          # tomorrow
+python analysis/lineup.py --team 4 --date 2026-11-18 --avail "Andrew Nembhard=0.3"
+```
+
+It reads live from ESPN (rosters, injury tags, the matchup score including today's games), so it needs
+only `.api.env` and works before the database is loaded. Each player's per-game line blends this season,
+the last 15 days and ESPN's projection. The rest of the week is simulated for both teams, with each team
+starting its best legal lineup every day. Every legal set of your players with a game that day is then scored
+on the same random draws, by P(win week). The report lists the recommended lineup, the lineups
+statistically tied with it, each player's start/bench impact, and who to start if a starter is ruled out.
+[`notebooks/lineup.ipynb`](notebooks/lineup.ipynb) charts the same results.
+
 ### Trade evaluator: `analysis/trade_eval.py`
 
 Compares a trade offer with keeping the current roster, using two horizons: the rest of this season
@@ -181,3 +198,4 @@ session runs it every morning (the environment must allow `lm-api-reads.fantasy.
 | `trade_market.ipynb` | Trades that raise my playoff odds and that the other manager would plausibly accept |
 | `siakam_trade.ipynb` | Fact-checks on my roster, and whether to trade Pascal Siakam to fix FT% |
 | `position_market.ipynb` | By position: who would crack my top 10 in build value (`zT`), plotted against 9-cat value (`z9`) |
+| `lineup.ipynb` | Who to start on a given day to win this week's matchup, with charts of each category, lineup and player |
